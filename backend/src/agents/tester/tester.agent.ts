@@ -14,7 +14,9 @@ export class TesterAgent extends BaseAgent {
     const filesString = JSON.stringify(input.files, null, 2);
     const { system, user } = buildTesterPrompt(filesString);
 
-    const response = await generateJSON(system, user);
+    console.log("[Tester] Validating code...");
+    const response = await generateJSON(system, user, 4096);
+    console.log("[Tester] Validation complete");
 
     const result = response as ValidationResult;
 
@@ -36,7 +38,8 @@ export class TesterAgent extends BaseAgent {
   parseValidation(response: string): ValidationResult | null {
     try {
       return JSON.parse(response) as ValidationResult;
-    } catch {
+    } catch (err) {
+      console.error("[Tester] Failed to parse validation JSON:", err);
       return null;
     }
   }

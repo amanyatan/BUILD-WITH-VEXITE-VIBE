@@ -14,7 +14,9 @@ export class DeveloperAgent extends BaseAgent {
     const planString = JSON.stringify(input.designPlan, null, 2);
     const { system, user } = buildDeveloperPrompt(planString);
 
-    const response = await generateJSON(system, user);
+    console.log("[Developer] Generating code...");
+    const response = await generateJSON(system, user, 16384);
+    console.log("[Developer] Code generated successfully");
 
     const result = response as CodeGenerationResult;
 
@@ -43,7 +45,9 @@ export class DeveloperAgent extends BaseAgent {
     const planString = JSON.stringify(designPlan, null, 2);
     const { system, user } = buildDeveloperFixPrompt(planString, currentFiles, validationReport);
 
-    const response = await generateJSON(system, user);
+    console.log("[Developer] Fixing code...");
+    const response = await generateJSON(system, user, 16384);
+    console.log("[Developer] Fix generated successfully");
 
     const result = response as CodeGenerationResult;
 
@@ -64,8 +68,15 @@ export class DeveloperAgent extends BaseAgent {
 
   parseFiles(response: string): CodeGenerationResult | null {
     try {
-      return JSON.parse(response) as CodeGenerationResult;
-    } catch {
+      const parsed = JSON.parse(response) as CodeGenerationResult;
+      if (!parsed.files || !Array.isArray(parsed.files) || parsed.files.length === 0) {
+        console.error("[Developer] Parsed JSON but no files array found");
+        return null;
+      }
+      return parsed;
+    } catch (err) {
+      console.error("[Developer] Failed to parse files JSON:", err);
+      console.error("[Developer] Response preview:", response.substring(0, 300));
       return null;
     }
   }

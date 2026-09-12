@@ -13,7 +13,9 @@ export class DesignerAgent extends BaseAgent {
 
     const { system, user } = buildDesignerPrompt(input.userRequest);
 
-    const response = await generateJSON(system, user);
+    console.log("[Designer] Creating design plan...");
+    const response = await generateJSON(system, user, 4096);
+    console.log("[Designer] Design plan created");
 
     const plan = response as DesignPlan;
 
@@ -35,7 +37,8 @@ export class DesignerAgent extends BaseAgent {
   parsePlan(response: string): DesignPlan | null {
     try {
       return JSON.parse(response) as DesignPlan;
-    } catch {
+    } catch (err) {
+      console.error("[Designer] Failed to parse plan JSON:", err);
       return null;
     }
   }

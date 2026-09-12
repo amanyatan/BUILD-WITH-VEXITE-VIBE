@@ -1,6 +1,34 @@
 "use client";
 import { useRef, useState, useCallback, useEffect } from "react";
 
+interface SpeechRecognitionEventLike extends Event {
+  results: SpeechRecognitionResultList;
+}
+
+interface SpeechRecognitionErrorEventLike extends Event {
+  error: string;
+}
+
+interface SpeechRecognitionLike {
+  continuous: boolean;
+  interimResults: boolean;
+  lang: string;
+  onresult: ((event: SpeechRecognitionEventLike) => void) | null;
+  onerror: ((event: SpeechRecognitionErrorEventLike) => void) | null;
+  onend: (() => void) | null;
+  start: () => void;
+  stop: () => void;
+}
+
+type SpeechRecognitionConstructor = new () => SpeechRecognitionLike;
+
+declare global {
+  interface Window {
+    SpeechRecognition?: SpeechRecognitionConstructor;
+    webkitSpeechRecognition?: SpeechRecognitionConstructor;
+  }
+}
+
 interface WorkflowEvent {
   type: string;
   agent?: string;
@@ -17,31 +45,7 @@ interface AgentStatus {
 }
 
 let sharedAudioContext: AudioContext | null = null;
-const captureWorkletSource = `
-class VibePcmCapture extends AudioWorkletProcessor {
-  process(inputs) {
-    const input = inputs[0] && inputs[0][0];
-    if (!input) return true;
-    const ratio = sampleRate / 16000;
-    const outputLength = Math.max(1, Math.floor(input.length / ratio));
-    const pcm = new Int16Array(outputLength);
-    for (let i = 0; i < outputLength; i += 1) {
-      const sample = input[Math.min(input.length - 1, Math.floor(i * ratio))];
-      pcm[i] = Math.max(-1, Math.min(1, sample)) * 0x7fff;
-    }
-    this.port.postMessage(pcm.buffer, [pcm.buffer]);
-    return true;
-  }
-}
-registerProcessor("vibe-pcm-capture", VibePcmCapture);
-`;
-
-function encodeBase64(buffer: ArrayBuffer): string {
-  const bytes = new Uint8Array(buffer);
-  let binary = "";
-  for (const byte of bytes) binary += String.fromCharCode(byte);
-  return btoa(binary);
-}
+type AudioPlayback = HTMLAudioElement | AudioBufferSourceNode;
 
 function getAudioContext(): AudioContext {
   if (!sharedAudioContext || sharedAudioContext.state === "closed") {
@@ -55,12 +59,7 @@ function getAudioContext(): AudioContext {
 
 export function useWebSocket(projectId: string) {
   const wsRef = useRef<WebSocket | null>(null);
-  const microphoneRef = useRef<MediaStream | null>(null);
-  const captureContextRef = useRef<AudioContext | null>(null);
-  const captureSourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
-  const captureNodeRef = useRef<AudioWorkletNode | null>(null);
-  const captureGainRef = useRef<GainNode | null>(null);
-  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const audioRef = useRef<AudioPlayback | null>(null);
   const [connected, setConnected] = useState(false);
   const [connecting, setConnecting] = useState(false);
   const [events, setEvents] = useState<WorkflowEvent[]>([]);
@@ -71,65 +70,34 @@ export function useWebSocket(projectId: string) {
   const [aiSpeaking, setAiSpeaking] = useState(false);
   const [aiThinking, setAiThinking] = useState(false);
   const [audioError, setAudioError] = useState<string | null>(null);
+  const [listening, setListening] = useState(false);
+  const [speechSupported, setSpeechSupported] = useState(false);
   const [audioQueue, setAudioQueue] = useState<Array<{ base64: string; mimeType: string }>>([]);
   const isPlayingRef = useRef(false);
+  const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
+  const listeningRequestedRef = useRef(false);
+  const sendTextRef = useRef<(text: string) => void>(() => undefined);
 
-  const stopMicrophone = useCallback(() => {
-    captureNodeRef.current?.disconnect();
-    captureSourceRef.current?.disconnect();
-    captureGainRef.current?.disconnect();
-    microphoneRef.current?.getTracks().forEach((track) => track.stop());
-    void captureContextRef.current?.close();
-    captureNodeRef.current = null;
-    captureSourceRef.current = null;
-    captureGainRef.current = null;
-    microphoneRef.current = null;
-    captureContextRef.current = null;
-  }, []);
-
-  const startSession = useCallback(async () => {
+  const startSession = useCallback(() => {
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) return;
     if (connecting) return;
 
     setConnecting(true);
     setAudioError(null);
+    void getAudioContext().resume().catch((error) => {
+      console.warn("[Audio] Could not unlock audio:", error);
+    });
     const wsUrl = process.env.NEXT_PUBLIC_WS_URL || "ws://localhost:4000/ws/conversation";
     console.log(`[WS] Connecting to ${wsUrl}...`);
-    try {
-      const microphone = await navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-      });
-      const captureContext = new AudioContext();
-      const workletUrl = URL.createObjectURL(new Blob([captureWorkletSource], { type: "application/javascript" }));
-      await captureContext.audioWorklet.addModule(workletUrl);
-      URL.revokeObjectURL(workletUrl);
+    const ws = new WebSocket(wsUrl);
+    wsRef.current = ws;
 
-      microphoneRef.current = microphone;
-      captureContextRef.current = captureContext;
-      const ws = new WebSocket(wsUrl);
-      wsRef.current = ws;
+    ws.onopen = () => {
+      console.log("[WS] Connected, sending start_session");
+      ws.send(JSON.stringify({ type: "start_session", projectId }));
+    };
 
-      ws.onopen = () => {
-        console.log("[WS] Connected, sending start_session");
-        ws.send(JSON.stringify({ type: "start_session", projectId }));
-        const source = captureContext.createMediaStreamSource(microphone);
-        const capture = new AudioWorkletNode(captureContext, "vibe-pcm-capture");
-        const silentGain = captureContext.createGain();
-        silentGain.gain.value = 0;
-        capture.port.onmessage = (event: MessageEvent<ArrayBuffer>) => {
-          if (ws.readyState === WebSocket.OPEN) {
-            ws.send(JSON.stringify({ type: "audio_chunk", audio: encodeBase64(event.data), mimeType: "audio/pcm;rate=16000" }));
-          }
-        };
-        source.connect(capture);
-        capture.connect(silentGain);
-        silentGain.connect(captureContext.destination);
-        captureSourceRef.current = source;
-        captureNodeRef.current = capture;
-        captureGainRef.current = silentGain;
-      };
-
-      ws.onmessage = (event) => {
+    ws.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
         console.log("[WS] Received:", data.type);
@@ -137,10 +105,6 @@ export function useWebSocket(projectId: string) {
         if (data.type === "live_ready") {
           setConnected(true);
           setConnecting(false);
-          ws.send(JSON.stringify({
-            type: "text_message",
-            text: "Greet the user briefly in spoken audio and ask what they would like to build.",
-          }));
           console.log("[WS] Session ready");
         }
 
@@ -200,26 +164,19 @@ export function useWebSocket(projectId: string) {
       } catch (e) {
         console.error("[WS] Parse error:", e);
       }
-      };
+    };
 
-      ws.onclose = (event) => {
+    ws.onclose = (event) => {
       console.log("[WS] Closed:", event.code, event.reason);
-      stopMicrophone();
       setConnected(false);
       setConnecting(false);
-      };
-      ws.onerror = (event) => {
+    };
+    ws.onerror = (event) => {
       console.error("[WS] WebSocket error:", event);
-      stopMicrophone();
       setConnected(false);
       setConnecting(false);
-      };
-    } catch (error) {
-      stopMicrophone();
-      setConnecting(false);
-      setAudioError(error instanceof Error ? error.message : "Microphone access is required.");
-    }
-  }, [projectId, connecting, stopMicrophone]);
+    };
+  }, [projectId, connecting]);
 
   function queueAudio(base64: string, mimeType: string) {
     setAudioQueue((prev) => [...prev, { base64, mimeType }]);
@@ -244,10 +201,71 @@ export function useWebSocket(projectId: string) {
     }]);
     wsRef.current?.send(JSON.stringify({ type: "text_message", text }));
   }, []);
+  sendTextRef.current = sendText;
+
+  useEffect(() => {
+    setSpeechSupported(Boolean(window.SpeechRecognition || window.webkitSpeechRecognition));
+  }, []);
+
+  const stopListening = useCallback(() => {
+    listeningRequestedRef.current = false;
+    recognitionRef.current?.stop();
+    setListening(false);
+  }, []);
+
+  const startListening = useCallback(() => {
+    const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!Recognition) {
+      setAudioError("Speech input is not supported in this browser. Use Chrome or Edge.");
+      return;
+    }
+
+    if (!recognitionRef.current) {
+      const recognition = new Recognition();
+      recognition.continuous = true;
+      recognition.interimResults = false;
+      recognition.lang = "en-IN";
+      recognition.onresult = (event) => {
+        const last = event.results[event.results.length - 1];
+        const transcript = last?.[0]?.transcript?.trim();
+        if (transcript && last.isFinal) {
+          sendTextRef.current(transcript);
+        }
+      };
+      recognition.onerror = (event) => {
+        if (event.error !== "aborted" && event.error !== "no-speech") {
+          setAudioError(`Microphone error: ${event.error}`);
+        }
+        setListening(false);
+      };
+      recognition.onend = () => {
+        setListening(false);
+        if (listeningRequestedRef.current && !isPlayingRef.current) {
+          try {
+            recognition.start();
+            setListening(true);
+          } catch {
+            // The browser can reject a restart while it is still closing.
+          }
+        }
+      };
+      recognitionRef.current = recognition;
+    }
+
+    listeningRequestedRef.current = true;
+    setAudioError(null);
+    try {
+      recognitionRef.current.start();
+      setListening(true);
+    } catch {
+      setAudioError("Microphone is already active or permission was denied.");
+    }
+  }, []);
 
   const interrupt = useCallback(() => {
     if (audioRef.current) {
-      audioRef.current.pause();
+      if (audioRef.current instanceof AudioBufferSourceNode) audioRef.current.stop();
+      else audioRef.current.pause();
       audioRef.current = null;
     }
     setAiSpeaking(false);
@@ -257,12 +275,13 @@ export function useWebSocket(projectId: string) {
   }, []);
 
   const stopSession = useCallback(() => {
+    stopListening();
     wsRef.current?.send(JSON.stringify({ type: "stop_session" }));
     wsRef.current?.close();
     wsRef.current = null;
-    stopMicrophone();
     if (audioRef.current) {
-      audioRef.current.pause();
+      if (audioRef.current instanceof AudioBufferSourceNode) audioRef.current.stop();
+      else audioRef.current.pause();
       audioRef.current = null;
     }
     isPlayingRef.current = false;
@@ -277,7 +296,7 @@ export function useWebSocket(projectId: string) {
     setAiSpeaking(false);
     setAiThinking(false);
     setAudioError(null);
-  }, [stopMicrophone]);
+  }, [stopListening]);
 
   function playAudio(base64Data: string, mimeType: string): Promise<void> {
     return new Promise((resolve) => {
@@ -289,7 +308,6 @@ export function useWebSocket(projectId: string) {
           return;
         }
 
-        // Decode base64 to ArrayBuffer
         const byteString = atob(base64Data);
         const ab = new ArrayBuffer(byteString.length);
         const ia = new Uint8Array(ab);
@@ -297,56 +315,21 @@ export function useWebSocket(projectId: string) {
           ia[i] = byteString.charCodeAt(i);
         }
 
-        const blob = new Blob([ab], { type: "audio/wav" });
-        const url = URL.createObjectURL(blob);
-        console.log(`[Audio] Created blob URL: ${url}`);
-
-        const audio = new Audio();
-        audio.preload = "auto";
-        audioRef.current = audio;
-
-        audio.onloadeddata = () => {
-          console.log("[Audio] Audio loaded, attempting play...");
-        };
-
-        audio.onended = () => {
-          console.log("[Audio] Playback ended");
-          URL.revokeObjectURL(url);
+        const ctx = await getAudioContext();
+        const audioBuffer = await ctx.decodeAudioData(ab.slice(0));
+        const source = ctx.createBufferSource();
+        source.buffer = audioBuffer;
+        source.connect(ctx.destination);
+        source.onended = () => {
           audioRef.current = null;
+          if (listeningRequestedRef.current) startListening();
           resolve();
         };
-
-        audio.onerror = (e) => {
-          console.error("[Audio] Audio element error:", e);
-          URL.revokeObjectURL(url);
-          audioRef.current = null;
-          resolve();
-        };
-
-        audio.src = url;
-
-        // Try to play - browsers may block autoplay
-        const playPromise = audio.play();
-        if (playPromise) {
-          playPromise.catch((err) => {
-            console.warn("[Audio] autoplay blocked, trying on user gesture:", err.message);
-            // Autoplay blocked - add one-time click handler to play
-            const handler = () => {
-              document.removeEventListener("click", handler);
-              audio.play().catch((e) => {
-                console.error("[Audio] Still can't play after gesture:", e);
-                resolve();
-              });
-            };
-            document.addEventListener("click", handler, { once: true });
-            // Also try to play after a small delay in case there's already been interaction
-            setTimeout(() => {
-              audio.play().catch(() => {});
-            }, 100);
-          });
-        }
+        source.start();
+        audioRef.current = source;
       } catch (err) {
         console.error("[Audio] playAudio error:", err);
+        setAudioError("The voice response could not be played. Check browser audio permissions.");
         resolve();
       }
     });
@@ -365,7 +348,6 @@ export function useWebSocket(projectId: string) {
         const rateMatch = mimeType.match(/rate=(\d+)/);
         const sampleRate = rateMatch ? parseInt(rateMatch[1]) : 24000;
 
-        // Decode PCM to float32
         const raw = new Int16Array(ab);
         const float32 = new Float32Array(raw.length);
         for (let i = 0; i < raw.length; i++) {
@@ -399,7 +381,11 @@ export function useWebSocket(projectId: string) {
     aiSpeaking,
     aiThinking,
     audioError,
+    listening,
+    speechSupported,
     startSession,
+    startListening,
+    stopListening,
     sendText,
     interrupt,
     stopSession,

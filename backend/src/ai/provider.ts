@@ -1,7 +1,7 @@
 import { config } from "../config";
 
 interface AIProvider {
-  generate(systemPrompt: string, userPrompt: string): Promise<string>;
+  generate(systemPrompt: string, userPrompt: string, maxTokens?: number): Promise<string>;
 }
 
 type JsonRecord = Record<string, unknown>;
@@ -15,7 +15,7 @@ class GroqProvider implements AIProvider {
     this.model = model;
   }
 
-  async generate(systemPrompt: string, userPrompt: string): Promise<string> {
+  async generate(systemPrompt: string, userPrompt: string, maxTokens = 4096): Promise<string> {
     const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
       method: "POST",
       headers: {
@@ -29,7 +29,7 @@ class GroqProvider implements AIProvider {
           { role: "user", content: userPrompt },
         ],
         temperature: 0.7,
-        max_tokens: 4096,
+        max_tokens: maxTokens,
       }),
     });
 
@@ -55,7 +55,7 @@ class GeminiProvider implements AIProvider {
     this.model = model;
   }
 
-  async generate(systemPrompt: string, userPrompt: string): Promise<string> {
+  async generate(systemPrompt: string, userPrompt: string, maxTokens = 8192): Promise<string> {
     const response = await fetch(
       `https://generativelanguage.googleapis.com/v1beta/models/${this.model}:generateContent?key=${this.apiKey}`,
       {
@@ -64,7 +64,7 @@ class GeminiProvider implements AIProvider {
         body: JSON.stringify({
           contents: [{ parts: [{ text: userPrompt }] }],
           systemInstruction: { parts: [{ text: systemPrompt }] },
-          generationConfig: { temperature: 0.7, maxOutputTokens: 4096 },
+          generationConfig: { temperature: 0.7, maxOutputTokens: maxTokens },
         }),
       }
     );
@@ -87,32 +87,53 @@ let provider: AIProvider | null = null;
 function getProvider(): AIProvider {
   if (provider) return provider;
 
-  const aiProvider = config.aiProvider || "groq";
-
-  if (aiProvider === "gemini" && config.geminiApiKey) {
+  // Always prefer Gemini for reliability (Groq models may not exist)
+  if (config.geminiApiKey) {
     provider = new GeminiProvider(config.geminiApiKey, config.geminiModel || "gemini-2.5-flash");
   } else if (config.groqApiKey) {
     provider = new GroqProvider(config.groqApiKey, config.groqModel || "llama-3.3-70b-versatile");
   } else if (config.aiApiKey) {
     provider = new GroqProvider(config.aiApiKey, config.aiModel || "llama-3.3-70b-versatile");
   } else {
-    throw new Error("No AI provider configured. Set GROQ_API_KEY or GEMINI_API_KEY.");
+    throw new Error("No AI provider configured. Set GEMINI_API_KEY or GROQ_API_KEY.");
   }
 
   return provider;
 }
 
-export async function generateJSON(systemPrompt: string, userPrompt: string): Promise<unknown> {
+export async function generateJSON(systemPrompt: string, userPrompt: string, maxTokens = 8192): Promise<unknown> {
   const p = getProvider();
-  const raw = await p.generate(systemPrompt, userPrompt);
+  const raw = await p.generate(systemPrompt, userPrompt, maxTokens);
 
-  const jsonMatch = raw.match(/\{[\s\S]*\}/);
-  if (!jsonMatch) throw new Error("AI did not return valid JSON");
+  // Try to extract JSON from the response - handle markdown code blocks
+  let cleaned = raw;
 
-  return JSON.parse(jsonMatch[0]);
+  // Remove markdown code block wrappers
+  cleaned = cleaned.replace(/```json\s*/g, "").replace(/```\s*/g, "");
+
+  // Find the first { ... } block using bracket counting for robustness
+  const startIdx = cleaned.indexOf("{");
+  if (startIdx === -1) throw new Error("AI did not return valid JSON");
+
+  let depth = 0;
+  let endIdx = -1;
+  for (let i = startIdx; i < cleaned.length; i++) {
+    if (cleaned[i] === "{") depth++;
+    if (cleaned[i] === "}") depth--;
+    if (depth === 0) { endIdx = i; break; }
+  }
+
+  if (endIdx === -1) {
+    // Try regex as fallback
+    const jsonMatch = cleaned.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) throw new Error("AI did not return valid JSON");
+    return JSON.parse(jsonMatch[0]);
+  }
+
+  return JSON.parse(cleaned.substring(startIdx, endIdx + 1));
 }
 
-export async function generateText(systemPrompt: string, userPrompt: string): Promise<string> {
+export async function generateText(systemPrompt: string, userPrompt: string, maxTokens = 4096): Promise<string> {
   const p = getProvider();
-  return p.generate(systemPrompt, userPrompt);
+  return p.generate(systemPrompt, userPrompt, maxTokens);
 }

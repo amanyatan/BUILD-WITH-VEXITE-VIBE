@@ -56,14 +56,30 @@ export class AgentOrchestrator {
   async start(userRequest: string, targetAgent?: AgentName): Promise<void> {
     this.state.isActive = true;
 
-    if (targetAgent === "designer") {
-      await this.runDesignerOnly(userRequest);
-    } else if (targetAgent === "developer") {
-      await this.runDeveloperOnly(userRequest);
-    } else if (targetAgent === "tester") {
-      await this.runTesterOnly(userRequest);
-    } else {
-      await this.runFullPipeline(userRequest);
+    try {
+      if (targetAgent === "designer") {
+        await this.runDesignerOnly(userRequest);
+      } else if (targetAgent === "developer") {
+        await this.runDeveloperOnly(userRequest);
+      } else if (targetAgent === "tester") {
+        await this.runTesterOnly(userRequest);
+      } else {
+        await this.runFullPipeline(userRequest);
+      }
+    } catch (err) {
+      console.error("[Orchestrator] Pipeline error:", err);
+      const errorAgent = targetAgent || "developer";
+      this.emit({
+        type: "agent_message",
+        agent: errorAgent,
+        message: {
+          id: `msg-${Date.now()}-error`,
+          role: errorAgent,
+          content: `Error: ${err instanceof Error ? err.message : "Unknown error"}`,
+          timestamp: new Date(),
+        },
+      });
+      this.complete();
     }
   }
 
@@ -105,6 +121,8 @@ export class AgentOrchestrator {
     if (result) {
       this.state.generatedFiles = result.files;
       this.emit({ type: "code_update", files: result.files });
+    } else {
+      console.error("[Orchestrator] Developer returned no parseable files");
     }
 
     this.emit({ type: "agent_message", agent: "developer", message: devMsg });
@@ -144,8 +162,19 @@ export class AgentOrchestrator {
     this.emit({ type: "agent_speaking", agent: "designer", message: designMsg });
 
     if (!this.state.designPlan) {
-      this.complete();
-      return;
+      console.warn("[Orchestrator] Design plan parse failed, using default plan");
+      // Create a default plan instead of aborting
+      this.state.designPlan = {
+        websiteType: "custom",
+        goal: userRequest,
+        targetAudience: "users",
+        sections: ["main content"],
+        features: [],
+        style: { theme: "modern", colors: [], typography: "system", layout: "responsive", spacing: "comfortable" },
+        responsiveBehavior: ["mobile-friendly"],
+        accessibilityRequirements: ["semantic HTML"],
+        requirements: [userRequest],
+      };
     }
 
     await this.develop();
@@ -163,6 +192,8 @@ export class AgentOrchestrator {
     if (result) {
       this.state.generatedFiles = result.files;
       this.emit({ type: "code_update", files: result.files });
+    } else {
+      console.error("[Orchestrator] Developer returned no parseable files");
     }
 
     this.emit({ type: "agent_message", agent: "developer", message: devMsg });
