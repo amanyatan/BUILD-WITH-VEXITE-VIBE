@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { ArrowRight, Sparkles, Loader2 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
+import { useAppStore } from "@/store";
 
 export default function LoginPage() {
   const [email, setEmail] = useState("");
@@ -13,12 +14,17 @@ export default function LoginPage() {
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const router = useRouter();
+  const setUser = useAppStore((s) => s.setUser);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
-      if (session) router.push("/dashboard");
+      if (session) {
+        setUser(session.user.email || null);
+        localStorage.setItem("user_email", session.user.email || "");
+        router.push("/dashboard");
+      }
     });
-  }, [router]);
+  }, [router, setUser]);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -33,11 +39,14 @@ export default function LoginPage() {
         if (data.user && !data.user.confirmed_at) {
           setMessage("Check your email for the confirmation link!");
         } else {
+          setUser(data.user?.email || email);
+          localStorage.setItem("user_email", data.user?.email || email);
           router.push("/dashboard");
         }
       } else {
         const { data, error } = await supabase.auth.signInWithPassword({ email, password });
         if (error) throw error;
+        setUser(data.user.email || email);
         localStorage.setItem("user_email", data.user.email || email);
         router.push("/dashboard");
       }
