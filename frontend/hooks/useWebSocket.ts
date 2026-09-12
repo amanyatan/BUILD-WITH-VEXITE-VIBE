@@ -129,6 +129,9 @@ export function useWebSocket(projectId: string) {
           setAiThinking(false);
           console.log(`[WS] Audio response received, mime=${data.audioMimeType}, length=${data.audio.length}`);
           setAudioError(null);
+          const resumeListening = listeningRequestedRef.current;
+          stopListening();
+          listeningRequestedRef.current = resumeListening;
           queueAudio(data.audio, data.audioMimeType || "audio/wav");
         }
 
@@ -315,18 +318,23 @@ export function useWebSocket(projectId: string) {
           ia[i] = byteString.charCodeAt(i);
         }
 
-        const ctx = await getAudioContext();
-        const audioBuffer = await ctx.decodeAudioData(ab.slice(0));
-        const source = ctx.createBufferSource();
-        source.buffer = audioBuffer;
-        source.connect(ctx.destination);
-        source.onended = () => {
-          audioRef.current = null;
-          if (listeningRequestedRef.current) startListening();
+        const ctx = getAudioContext();
+        ctx.decodeAudioData(ab.slice(0)).then((audioBuffer) => {
+          const source = ctx.createBufferSource();
+          source.buffer = audioBuffer;
+          source.connect(ctx.destination);
+          source.onended = () => {
+            audioRef.current = null;
+            if (listeningRequestedRef.current) startListening();
+            resolve();
+          };
+          source.start();
+          audioRef.current = source;
+        }).catch((err: unknown) => {
+          console.error("[Audio] Audio decode error:", err);
+          setAudioError("The voice response could not be decoded.");
           resolve();
-        };
-        source.start();
-        audioRef.current = source;
+        });
       } catch (err) {
         console.error("[Audio] playAudio error:", err);
         setAudioError("The voice response could not be played. Check browser audio permissions.");

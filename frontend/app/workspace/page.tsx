@@ -24,7 +24,26 @@ function WorkspaceContent() {
   const [sessionStarted, setSessionStarted] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  const { connected, connecting, events, agentStatus, currentStep, generatedFiles, validationResult, aiSpeaking, aiThinking, audioError, startSession, sendText, interrupt, stopSession } = useWebSocket(projectId);
+  const {
+    connected,
+    connecting,
+    events,
+    agentStatus,
+    currentStep,
+    generatedFiles,
+    validationResult,
+    aiSpeaking,
+    aiThinking,
+    audioError,
+    listening,
+    speechSupported,
+    startSession,
+    startListening,
+    stopListening,
+    sendText,
+    interrupt,
+    stopSession,
+  } = useWebSocket(projectId);
 
   const messages = events.filter((e) => e.type === "agent_message" || e.type === "user_message" || e.type === "workflow_step" || e.type === "text_response");
 
@@ -43,6 +62,7 @@ function WorkspaceContent() {
   function handleStartConversation() {
     setSessionStarted(true);
     startSession();
+    startListening();
   }
 
   function handleEndConversation() {
@@ -212,6 +232,17 @@ function WorkspaceContent() {
               placeholder={!sessionStarted ? "Start a conversation first…" : !connected ? "Connecting…" : "Type your message…"}
               disabled={!sessionStarted || !connected}
             />
+            <button
+              type="button"
+              className={`button ${listening ? "button-primary" : "button-secondary"}`}
+              onClick={listening ? stopListening : startListening}
+              disabled={!sessionStarted || !connected || !speechSupported}
+              title={!speechSupported ? "Speech input is not supported in this browser" : listening ? "Stop listening" : "Speak to Vibe"}
+              aria-label={!speechSupported ? "Speech input is not supported" : listening ? "Stop listening" : "Speak to Vibe"}
+              style={listening ? { background: "#e74c3c" } : undefined}
+            >
+              {listening ? <MicOff size={14} /> : <Mic size={14} />}
+            </button>
             {aiSpeaking ? (
               <button type="button" className="button button-primary" onClick={interrupt} style={{ background: "#e74c3c" }}>
                 <Square size={14} />
