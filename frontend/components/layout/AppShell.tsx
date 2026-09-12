@@ -12,6 +12,8 @@ const nav = [
   { href: "/settings", label: "Settings", icon: Settings },
 ];
 
+const isSupabaseConfigured = !!(process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY);
+
 export function AppShell({ children, title }: { children: React.ReactNode; title?: string }) {
   const path = usePathname();
   const router = useRouter();
@@ -22,7 +24,7 @@ export function AppShell({ children, title }: { children: React.ReactNode; title
     const stored = localStorage.getItem("user_email");
     if (stored) {
       setUserEmail(stored);
-    } else {
+    } else if (isSupabaseConfigured) {
       supabase.auth.getSession().then(({ data: { session } }) => {
         if (session?.user?.email) {
           setUserEmail(session.user.email);
@@ -36,7 +38,9 @@ export function AppShell({ children, title }: { children: React.ReactNode; title
   const initials = displayName.slice(0, 2).toUpperCase();
 
   async function handleLogout() {
-    await supabase.auth.signOut();
+    if (isSupabaseConfigured) {
+      await supabase.auth.signOut();
+    }
     localStorage.removeItem("user_email");
     router.push("/login");
   }

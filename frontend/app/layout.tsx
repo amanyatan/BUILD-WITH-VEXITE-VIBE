@@ -7,6 +7,7 @@ import { supabase } from "@/lib/supabase";
 import { useAppStore } from "@/store";
 
 const publicPaths = ["/", "/login"];
+const isSupabaseConfigured = !!(process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY);
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
@@ -15,7 +16,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   const setUser = useAppStore((s) => s.setUser);
 
   useEffect(() => {
-    if (publicPaths.includes(pathname)) {
+    if (!isSupabaseConfigured || publicPaths.includes(pathname)) {
       setChecking(false);
       return;
     }
@@ -28,10 +29,13 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         localStorage.setItem("user_email", session.user.email || "");
         setChecking(false);
       }
+    }).catch(() => {
+      setChecking(false);
     });
   }, [pathname, router, setUser]);
 
   useEffect(() => {
+    if (!isSupabaseConfigured) return;
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       setUser(session?.user?.email || null);
       if (session?.user?.email) {

@@ -6,6 +6,8 @@ import { ArrowRight, Sparkles, Loader2 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { useAppStore } from "@/store";
 
+const isSupabaseConfigured = !!(process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY);
+
 export default function LoginPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -17,6 +19,7 @@ export default function LoginPage() {
   const setUser = useAppStore((s) => s.setUser);
 
   useEffect(() => {
+    if (!isSupabaseConfigured) return;
     supabase.auth.getSession().then(({ data: { session } }) => {
       if (session) {
         setUser(session.user.email || null);
@@ -31,6 +34,12 @@ export default function LoginPage() {
     setLoading(true);
     setError("");
     setMessage("");
+
+    if (!isSupabaseConfigured) {
+      setError("Supabase is not configured. Set NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY.");
+      setLoading(false);
+      return;
+    }
 
     try {
       if (isSignUp) {
