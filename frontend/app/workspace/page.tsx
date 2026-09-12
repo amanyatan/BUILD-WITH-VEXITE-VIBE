@@ -2,7 +2,7 @@
 import { Suspense, useMemo, useState, useRef, useEffect } from "react";
 import { useSearchParams } from "next/navigation";
 import Image from "next/image";
-import { Send, Mic, MicOff, RefreshCw, Play, Square, Volume2, Loader2, MessageSquare } from "lucide-react";
+import { Send, Mic, MicOff, RefreshCw, Play, Square, Volume2, Loader2, MessageSquare, Phone, PhoneOff } from "lucide-react";
 import { AppShell } from "@/components/layout/AppShell";
 import { useAppStore } from "@/store";
 import { useWebSocket } from "@/hooks/useWebSocket";
@@ -22,13 +22,14 @@ function WorkspaceContent() {
   const [prompt, setPrompt] = useState("");
   const [previewKey, setPreviewKey] = useState(0);
   const [isRecording, setIsRecording] = useState(false);
+  const [sessionStarted, setSessionStarted] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const audioCtxRef = useRef<AudioContext | null>(null);
   const processorRef = useRef<ScriptProcessorNode | null>(null);
 
-  const { connected, events, agentStatus, currentStep, generatedFiles, validationResult, aiSpeaking, sendText, sendAudio, interrupt, stopSession } = useWebSocket(projectId);
+  const { connected, connecting, events, agentStatus, currentStep, generatedFiles, validationResult, aiSpeaking, startSession, sendText, sendAudio, interrupt, stopSession } = useWebSocket(projectId);
 
-  const messages = events.filter((e) => e.type === "agent_message" || e.type === "user_message" || e.type === "workflow_step");
+  const messages = events.filter((e) => e.type === "agent_message" || e.type === "user_message" || e.type === "workflow_step" || e.type === "text_response");
 
   const srcDoc = useMemo(() => {
     const html = generatedFiles["index.html"] || files["index.html"];
@@ -42,9 +43,28 @@ function WorkspaceContent() {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [events]);
 
+  function handleStartConversation() {
+    setSessionStarted(true);
+    startSession();
+  }
+
+  function handleEndConversation() {
+    stopSession();
+    setSessionStarted(false);
+    setIsRecording(false);
+    if (processorRef.current) {
+      processorRef.current.disconnect();
+      processorRef.current = null;
+    }
+    if (audioCtxRef.current) {
+      audioCtxRef.current.close();
+      audioCtxRef.current = null;
+    }
+  }
+
   function handleSend(e: React.FormEvent) {
     e.preventDefault();
-    if (!prompt.trim()) return;
+    if (!prompt.trim() || !sessionStarted) return;
     sendText(prompt.trim());
     setPrompt("");
   }
@@ -108,9 +128,9 @@ function WorkspaceContent() {
                 {connected ? "Live" : "Connecting…"}
               </span>
               {aiSpeaking && <Volume2 size={14} color="#6d5dfc" style={{ animation: "spin 1s linear infinite" }} />}
-              {currentStep && currentStep !== "complete" && (
-                <button className="button button-danger" onClick={stopSession} style={{ padding: "4px 10px", fontSize: 11 }}>
-                  <Square size={12} /> Stop
+              {sessionStarted && (
+                <button className="button button-danger" onClick={handleEndConversation} style={{ padding: "4px 10px", fontSize: 11 }}>
+                  <PhoneOff size={12} /> End
                 </button>
               )}
             </div>
@@ -128,31 +148,51 @@ function WorkspaceContent() {
           </div>
 
           <div className="messages">
-            {messages.length === 0 && (
-              <div style={{ textAlign: "center", padding: "30px 20px" }}>
-                <div style={{ display: "flex", justifyContent: "center", gap: 14, marginBottom: 20 }}>
+            {!sessionStarted && (
+              <div style={{ textAlign: "center", padding: "40px 20px" }}>
+                <div style={{ display: "flex", justifyContent: "center", gap: 14, marginBottom: 24 }}>
                   {agentCards.map((agent) => (
                     <div key={agent.key} style={{ textAlign: "center" }}>
-                      <div style={{ width: 56, height: 56, borderRadius: 14, overflow: "hidden", border: `2px solid ${agent.color}`, position: "relative" }}>
+                      <div style={{ width: 64, height: 64, borderRadius: 16, overflow: "hidden", border: `2px solid ${agent.color}`, position: "relative" }}>
                         <Image src={agent.image} alt={agent.name} fill style={{ objectFit: "cover" }} />
                       </div>
-                      <p style={{ fontSize: 10, marginTop: 5, color: agent.color, fontWeight: 700 }}>{agent.name}</p>
+                      <p style={{ fontSize: 11, marginTop: 6, color: agent.color, fontWeight: 700 }}>{agent.name}</p>
                     </div>
                   ))}
                 </div>
-                <p style={{ color: "var(--muted)", fontSize: 14, marginBottom: 4 }}>Describe what you want to build</p>
-                <p style={{ color: "var(--muted)", fontSize: 12 }}>Example: &ldquo;Build a tic-tac-toe game for me&rdquo;</p>
+                <h2 style={{ fontSize: 20, margin: "0 0 8px", letterSpacing: "-0.03em" }}>Ready to build?</h2>
+                <p style={{ color: "var(--muted)", fontSize: 13, marginBottom: 20, maxWidth: 320, margin: "0 auto 20px" }}>
+                  Start a conversation with your AI team. Describe what you want to build and watch it come to life.
+                </p>
+                <button
+                  className="button button-primary"
+                  onClick={handleStartConversation}
+                  disabled={connecting}
+                  style={{ padding: "12px 28px", fontSize: 14 }}
+                >
+                  {connecting ? <Loader2 size={16} className="animate-spin" /> : <Phone size={16} />} {connecting ? "Connecting…" : "Start Conversation"}
+                </button>
+                {connecting && (
+                  <p style={{ color: "var(--muted)", fontSize: 11, marginTop: 8 }}>Connecting to AI…</p>
+                )}
+              </div>
+            )}
+
+            {sessionStarted && messages.length === 0 && (
+              <div style={{ textAlign: "center", padding: "30px 20px" }}>
+                <p style={{ color: "var(--muted)", fontSize: 13, marginBottom: 4 }}>Conversation started!</p>
+                <p style={{ color: "var(--muted)", fontSize: 12 }}>Try: &ldquo;Build a tic-tac-toe game for me&rdquo;</p>
               </div>
             )}
 
             {messages.map((event, i) => {
               if (event.type === "workflow_step") {
                 const labels: Record<string, string> = {
-                  design: "🎨 Designer is designing",
-                  develop: "💻 Developer is coding",
-                  test: "🧪 Tester is validating",
-                  fix: "🔧 Developer is fixing",
-                  complete: "✅ Complete",
+                  design: "Designer is designing",
+                  develop: "Developer is coding",
+                  test: "Tester is validating",
+                  fix: "Developer is fixing",
+                  complete: "Done!",
                 };
                 return (
                   <div key={i} style={{ textAlign: "center", padding: "5px 0" }}>
@@ -163,14 +203,22 @@ function WorkspaceContent() {
                 );
               }
 
+              if (event.type === "text_response" && event.message) {
+                return (
+                  <div key={i} className="message agent" style={{ borderLeft: "3px solid #6d5dfc" }}>
+                    <small style={{ color: "#6d5dfc" }}>vibe</small>
+                    {event.message.content}
+                  </div>
+                );
+              }
+
               if (event.type === "agent_message" && event.message) {
                 const role = event.message.role;
                 const colors: Record<string, string> = { designer: "#6d5dfc", developer: "#20a36f", tester: "#e67e22", user: "#697386" };
                 let text = event.message.content;
                 try {
                   const parsed = JSON.parse(text);
-                  if (role === "designer" && parsed.websiteType) text = `Design plan: ${parsed.websiteType} for ${parsed.targetAudience || "users"}.`;
-                  else if (role === "developer" && parsed.files) text = `Generated: ${parsed.files.map((f: { path: string }) => f.path).join(", ")}`;
+                  if (role === "developer" && parsed.files) text = `Generated: ${parsed.files.map((f: { path: string }) => f.path).join(", ")}`;
                   else if (role === "tester" && parsed.status) text = `Validation: ${parsed.status}. ${parsed.errors?.length || 0} errors.`;
                 } catch { /* use raw */ }
 
@@ -187,21 +235,23 @@ function WorkspaceContent() {
           </div>
 
           <form className="chat-form" onSubmit={handleSend}>
-            <button type="button" className="icon-button" onClick={toggleRecording} aria-label={isRecording ? "Stop" : "Voice"}>
-              {isRecording ? <MicOff size={15} color="#e74c3c" /> : <Mic size={15} />}
-            </button>
+            {sessionStarted && (
+              <button type="button" className="icon-button" onClick={toggleRecording} aria-label={isRecording ? "Stop" : "Voice"}>
+                {isRecording ? <MicOff size={15} color="#e74c3c" /> : <Mic size={15} />}
+              </button>
+            )}
             <input
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}
-              placeholder={connected ? "Type or use mic…" : "Connecting…"}
-              disabled={!connected}
+              placeholder={!sessionStarted ? "Start a conversation first…" : "Type or use mic…"}
+              disabled={!sessionStarted || !connected}
             />
             {aiSpeaking ? (
               <button type="button" className="button button-primary" onClick={interrupt} style={{ background: "#e74c3c" }}>
                 <Square size={14} />
               </button>
             ) : (
-              <button className="button button-primary" type="submit" disabled={!prompt.trim() || !connected}>
+              <button className="button button-primary" type="submit" disabled={!sessionStarted || !prompt.trim() || !connected}>
                 <Send size={14} />
               </button>
             )}

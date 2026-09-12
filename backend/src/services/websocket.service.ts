@@ -30,19 +30,19 @@ const toolDeclarations = [
     functionDeclarations: [
       {
         name: "run_agent_task",
-        description: "Execute a website task with the selected Vibe agent and stream any generated code updates.",
+        description: "Build or modify a website using the Vibe agent team. Use this when the user asks to create, build, design, code, fix, or modify any website or web app. The agents will generate HTML, CSS, and JavaScript files.",
         parameters: {
           type: "OBJECT",
           properties: {
-            agent: { type: "STRING", enum: ["developer", "designer", "tester"] },
-            task: { type: "STRING", description: "The requested website task." },
+            agent: { type: "STRING", enum: ["developer", "designer", "tester"], description: "Which agent to use. Use 'designer' for planning, 'developer' for coding, 'tester' for validation." },
+            task: { type: "STRING", description: "Clear description of what to build or modify." },
           },
           required: ["agent", "task"],
         },
       },
       {
         name: "web_search",
-        description: "Search current public web information when the user asks for current research.",
+        description: "Search the web for current information when the user asks about recent events, facts, or research.",
         parameters: {
           type: "OBJECT",
           properties: { query: { type: "STRING" } },
@@ -73,9 +73,10 @@ function closeSocket(ws: WebSocket | null): void {
   if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) ws.close();
 }
 
-async function runAgentTask(session: LiveSession, args: { agent?: string; task?: string }): Promise<object> {
+function runAgentTask(session: LiveSession, args: { agent?: string; task?: string }): { status: string; message: string } {
   if (!isAgentName(args.agent) || !args.task) throw new Error("Agent task requires a valid agent and task");
   session.activeAgent = args.agent;
+
   const orchestrator = new AgentOrchestrator(session.projectId || session.id);
   orchestrator.onEvent((event) => {
     if (event.type === "code_update" && event.files) {
@@ -86,8 +87,16 @@ async function runAgentTask(session: LiveSession, args: { agent?: string; task?:
     }
     send(session.ws, { type: "workflow_event", event });
   });
-  await orchestrator.start(args.task);
-  return { status: "completed", agent: args.agent, task: args.task };
+
+  orchestrator.start(args.task).catch((err) => {
+    console.error("Agent workflow error:", err);
+    send(session.ws, { type: "error", message: `Agent workflow failed: ${err.message}` });
+  });
+
+  return {
+    status: "started",
+    message: `The ${args.agent} agent is now working on: ${args.task}. Code updates will appear in the editor as they are generated.`,
+  };
 }
 
 async function handleToolCall(session: LiveSession, toolCall: { functionCalls?: Array<{ id: string; name: string; args?: Record<string, unknown> }> }): Promise<void> {
@@ -98,7 +107,7 @@ async function handleToolCall(session: LiveSession, toolCall: { functionCalls?: 
         call.name === "web_search"
           ? { results: await searchWeb(String(call.args?.query || "")) }
           : call.name === "run_agent_task"
-            ? await runAgentTask(session, call.args as { agent?: string; task?: string })
+            ? runAgentTask(session, call.args as { agent?: string; task?: string })
             : { error: `Unknown tool: ${call.name}` };
       functionResponses.push({ name: call.name, id: call.id, response: { result } });
     } catch (error) {
@@ -133,7 +142,28 @@ function connectGemini(session: LiveSession): void {
         tools: toolDeclarations,
         systemInstruction: {
           parts: [{
-            text: "You are Vibe, an AI website builder with 3 agents: Designer, Developer, and Tester. When the user describes a website idea, first ask any clarifying questions as the Designer, then use run_agent_task to have the Developer build it, then the Tester validates it. Respond naturally and briefly in audio. The user can interrupt you at any time.",
+            text: `You are Vibe, a friendly AI website builder assistant. You have a team of 3 agents: Designer, Developer, and Tester.
+
+Your role:
+- Be conversational, warm, and helpful. Greet the user and ask clarifying questions when needed.
+- When the user asks to BUILD, CREATE, or CODE a website/app, use the run_agent_task tool with agent="developer" and a clear task description.
+- When the user asks to DESIGN or PLAN, use run_agent_task with agent="designer".
+- When the user asks to TEST or VALIDATE, use run_agent_task with agent="tester".
+- When the user asks general questions (what is React? how does CSS work? etc.), answer directly from your knowledge — do NOT use tools for general knowledge questions.
+- Keep audio responses short and natural (2-3 sentences max).
+- Confirm when agents start working and let the user know code will appear in the editor.
+
+Example interactions:
+User: "Build a tic tac toe game for me"
+You: "Great idea! Let me have the Developer agent build a tic-tac-toe game for you right now. The code will appear in your editor shortly."
+[Then call run_agent_task with agent="developer", task="Build a tic-tac-toe game with HTML, CSS, and JavaScript"]
+
+User: "What is React?"
+You: "React is a JavaScript library for building user interfaces, maintained by Meta. It lets you create reusable UI components. Would you like me to build something with React?"
+
+User: "Make the button blue"
+You: "Sure! Let me have the Developer update that for you."
+[Then call run_agent_task with agent="developer", task="Change the button color to blue"]`,
           }],
         },
         inputAudioTranscription: {},
@@ -200,10 +230,21 @@ function connectGemini(session: LiveSession): void {
     send(session.ws, { type: "error", message: `Gemini Live failed: ${error.message}` });
   });
 
-  live.on("close", () => {
+  live.on("unexpected-response", (req, res) => {
+    const statusCode = res.statusCode;
+    let body = "";
+    res.on("data", (chunk) => { body += chunk; });
+    res.on("end", () => {
+      console.error(`Gemini Live unexpected response ${statusCode}:`, body);
+      send(session.ws, { type: "error", message: `Gemini Live rejected connection (${statusCode}): ${body}` });
+    });
+  });
+
+  live.on("close", (code, reason) => {
+    console.error(`Gemini Live closed: code=${code} reason=${reason?.toString() || "none"}`);
     session.live = null;
     session.liveReady = false;
-    if (!session.closed) send(session.ws, { type: "error", message: "Gemini Live disconnected" });
+    if (!session.closed) send(session.ws, { type: "error", message: `Gemini Live disconnected (code: ${code})` });
   });
 }
 

@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useRef, useState, useCallback } from "react";
 
 interface WorkflowEvent {
   type: string;
@@ -20,6 +20,7 @@ export function useWebSocket(projectId: string) {
   const wsRef = useRef<WebSocket | null>(null);
   const audioCtxRef = useRef<AudioContext | null>(null);
   const [connected, setConnected] = useState(false);
+  const [connecting, setConnecting] = useState(false);
   const [events, setEvents] = useState<WorkflowEvent[]>([]);
   const [agentStatus, setAgentStatus] = useState<AgentStatus>({ designer: "idle", developer: "idle", tester: "idle" });
   const [currentStep, setCurrentStep] = useState("");
@@ -27,15 +28,16 @@ export function useWebSocket(projectId: string) {
   const [validationResult, setValidationResult] = useState<WorkflowEvent["validation"] | null>(null);
   const [aiSpeaking, setAiSpeaking] = useState(false);
 
-  useEffect(() => {
-    if (!projectId) return;
+  const startSession = useCallback(() => {
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) return;
+    if (connecting) return;
 
+    setConnecting(true);
     const wsUrl = process.env.NEXT_PUBLIC_WS_URL || "ws://localhost:4000/ws/conversation";
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
 
     ws.onopen = () => {
-      setConnected(true);
       ws.send(JSON.stringify({ type: "start_session", projectId }));
     };
 
@@ -49,6 +51,7 @@ export function useWebSocket(projectId: string) {
 
         if (data.type === "live_ready") {
           setConnected(true);
+          setConnecting(false);
         }
 
         if (data.type === "workflow_event") {
@@ -61,13 +64,13 @@ export function useWebSocket(projectId: string) {
           if (wfEvent.type === "code_update" && wfEvent.files) {
             const m: Record<string, string> = {};
             wfEvent.files.forEach((f) => { m[f.path] = f.content; });
-            setGeneratedFiles(m);
+            setGeneratedFiles((prev) => ({ ...prev, ...m }));
           }
           if (wfEvent.type === "validation_update" && wfEvent.validation) setValidationResult(wfEvent.validation);
         }
 
         if (data.type === "code_update" && data.files) {
-          setGeneratedFiles(data.files);
+          setGeneratedFiles((prev) => ({ ...prev, ...data.files }));
         }
 
         if (data.type === "input_transcript" && data.text) {
@@ -86,7 +89,7 @@ export function useWebSocket(projectId: string) {
 
         if (data.type === "text_response" && data.text) {
           setEvents((prev) => [...prev, {
-            type: "agent_message",
+            type: "text_response",
             message: { id: `ai-${Date.now()}`, role: "designer", content: data.text, timestamp: new Date().toISOString() },
           }]);
         }
@@ -110,11 +113,16 @@ export function useWebSocket(projectId: string) {
       } catch { /* ignore */ }
     };
 
-    ws.onclose = () => setConnected(false);
-    ws.onerror = () => setConnected(false);
+    ws.onclose = () => {
+      setConnected(false);
+      setConnecting(false);
+    };
 
-    return () => { ws.close(); };
-  }, [projectId]);
+    ws.onerror = () => {
+      setConnected(false);
+      setConnecting(false);
+    };
+  }, [projectId, connecting]);
 
   const sendText = useCallback((text: string) => {
     wsRef.current?.send(JSON.stringify({ type: "text_message", text }));
@@ -130,6 +138,16 @@ export function useWebSocket(projectId: string) {
 
   const stopSession = useCallback(() => {
     wsRef.current?.send(JSON.stringify({ type: "stop_session" }));
+    wsRef.current?.close();
+    wsRef.current = null;
+    setConnected(false);
+    setConnecting(false);
+    setEvents([]);
+    setAgentStatus({ designer: "idle", developer: "idle", tester: "idle" });
+    setCurrentStep("");
+    setGeneratedFiles({});
+    setValidationResult(null);
+    setAiSpeaking(false);
   }, []);
 
   function playAudioPCM(base64Data: string, mimeType: string): Promise<void> {
@@ -165,5 +183,5 @@ export function useWebSocket(projectId: string) {
     });
   }
 
-  return { connected, events, agentStatus, currentStep, generatedFiles, validationResult, aiSpeaking, sendText, sendAudio, interrupt, stopSession };
+  return { connected, connecting, events, agentStatus, currentStep, generatedFiles, validationResult, aiSpeaking, startSession, sendText, sendAudio, interrupt, stopSession };
 }
