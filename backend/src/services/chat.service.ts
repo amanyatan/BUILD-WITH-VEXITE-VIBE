@@ -1,18 +1,20 @@
 import { config } from "../config";
 import { AgentOrchestrator } from "../agents/agent.orchestrator";
 import { AgentName, isAgentName } from "./agent-router.service";
+import { synthesizeSpeech } from "./tts.service";
+import { emitToProject } from "./event-bus";
 
 const TOOL_DECLARATIONS = [
   {
     functionDeclarations: [
       {
         name: "run_agent_task",
-        description: "Build or modify a website using the Vibe agent team. Call this when the user asks to create, build, design, code, fix, or modify any website or web app.",
+        description: "Build or modify a website. Call when user asks to create, build, code, design, or modify a website or app.",
         parameters: {
           type: "OBJECT",
           properties: {
             agent: { type: "STRING", enum: ["developer", "designer", "tester"] },
-            task: { type: "STRING", description: "Clear description of what to build or modify." },
+            task: { type: "STRING", description: "What to build or modify." },
           },
           required: ["agent", "task"],
         },
@@ -21,27 +23,28 @@ const TOOL_DECLARATIONS = [
   },
 ];
 
-const SYSTEM_PROMPT = `You are Vibe, a friendly AI website builder assistant with a team of 3 agents: Designer, Developer, and Tester.
+const SYSTEM_PROMPT = `You are Vibe, a friendly AI website builder. You have 3 agents: Designer, Developer, Tester.
 
-When the user asks to BUILD, CREATE, CODE, or MAKE a website/app, respond conversationally and call the run_agent_task tool with agent="developer".
-When the user asks to DESIGN or PLAN, call run_agent_task with agent="designer".
-When the user asks to TEST or VALIDATE, call run_agent_task with agent="tester".
-For general questions, answer directly without using tools.
+RULES:
+- User asks to BUILD/CREATE/CODE/MAKE → call run_agent_task(agent="developer", task="...")
+- User asks to DESIGN/PLAN → call run_agent_task(agent="designer", task="...")
+- User asks to TEST/VALIDATE → call run_agent_task(agent="tester", task="...")
+- General questions → answer directly, no tools
+- Keep responses SHORT (1-2 sentences max) because they will be spoken aloud
+- Always respond with a text response AND optionally a tool call`;
 
-Keep responses concise and helpful.`;
-
-interface ChatResponse {
+export interface ChatResult {
   text: string;
+  audio?: string;
+  audioMimeType?: string;
   agent?: AgentName;
   task?: string;
 }
 
 export async function handleTextChat(
   userMessage: string,
-  projectId: string,
-  onCodeUpdate: (files: Record<string, string>) => void,
-  onWorkflowEvent: (event: object) => void
-): Promise<ChatResponse> {
+  projectId: string
+): Promise<ChatResult> {
   const apiKey = config.geminiApiKey;
   if (!apiKey) throw new Error("GEMINI_API_KEY not configured");
 
@@ -74,7 +77,7 @@ export async function handleTextChat(
   };
 
   if (!response.ok) {
-    throw new Error(data.error?.message || `Gemini request failed: ${response.status}`);
+    throw new Error(data.error?.message || `Gemini failed: ${response.status}`);
   }
 
   const parts = data.candidates?.[0]?.content?.parts || [];
@@ -88,28 +91,42 @@ export async function handleTextChat(
 
   const responseText = textParts.join("\n") || "Done!";
 
-  if (toolCall && toolCall.name === "run_agent_task" && toolCall.args) {
-    const args = toolCall.args;
-    const agent = args.agent as string;
-    const task = args.task as string;
+  let agent: AgentName | undefined;
+  let task: string | undefined;
 
-    if (isAgentName(agent) && task) {
+  if (toolCall?.name === "run_agent_task" && toolCall.args) {
+    const a = toolCall.args.agent as string;
+    const t = toolCall.args.task as string;
+    if (isAgentName(a) && t) {
+      agent = a;
+      task = t;
+
       const orchestrator = new AgentOrchestrator(projectId);
       orchestrator.onEvent((event) => {
-        onWorkflowEvent(event);
+        emitToProject(projectId, { type: "workflow_event", event });
       });
-
       orchestrator.start(task, agent).catch((err) => {
-        console.error("Agent workflow error:", err);
+        console.error("Agent error:", err);
       });
-
-      return {
-        text: responseText,
-        agent,
-        task,
-      };
     }
   }
 
-  return { text: responseText };
+  let audio: string | undefined;
+  let audioMimeType: string | undefined;
+
+  try {
+    const ttsAgent: AgentName = agent || "designer";
+    const tts = await synthesizeSpeech(responseText, ttsAgent);
+    audio = tts.audio;
+    audioMimeType = tts.mimeType;
+  } catch (err) {
+    console.error("TTS failed:", err);
+  }
+
+  if (audio) {
+    emitToProject(projectId, { type: "audio_response", audio, audioMimeType });
+  }
+  emitToProject(projectId, { type: "text_response", text: responseText });
+
+  return { text: responseText, audio, audioMimeType, agent, task };
 }

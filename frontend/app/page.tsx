@@ -7,13 +7,15 @@ export default function Home() {
     <main style={{ margin: 0, padding: 0 }}>
       <section style={{ position: "relative", width: "100%", height: "100vh", overflow: "hidden" }}>
         <Image src="/herosection image.jpg" alt="Hero" fill style={{ objectFit: "cover" }} priority />
-        <nav style={{ position: "absolute", top: 0, left: 0, right: 0, zIndex: 10, display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 38px", height: 75 }}>
+        <nav className="landing-nav">
           <Link href="/" style={{ display: "flex", alignItems: "center", gap: 10, fontWeight: 800, fontSize: 24, color: "#fff", letterSpacing: "-0.04em" }}><span style={{ width: 30, height: 30, borderRadius: 9, background: "#6d5dfc", display: "grid", placeItems: "center", color: "#fff", fontSize: 15 }}>V</span>vibe</Link>
-          <div style={{ display: "flex", alignItems: "center", gap: 20 }}>
-            <Link href="/projects" style={{ color: "rgba(255,255,255,.85)", fontSize: 14, textDecoration: "none", fontWeight: 600 }}>Projects</Link>
-            <Link href="/workspace" style={{ color: "rgba(255,255,255,.85)", fontSize: 14, textDecoration: "none", fontWeight: 600 }}>Workspace</Link>
-            <Link href="/agents" style={{ color: "rgba(255,255,255,.85)", fontSize: 14, textDecoration: "none", fontWeight: 600 }}>Agents</Link>
-            <Link href="/settings" style={{ color: "rgba(255,255,255,.85)", fontSize: 14, textDecoration: "none", fontWeight: 600 }}>Settings</Link>
+          <div className="landing-nav-menu" aria-label="Main navigation">
+            <span className="landing-nav-item">Home</span>
+            <span className="landing-nav-item">About</span>
+            <span className="landing-nav-item">Contact Us</span>
+            <span className="landing-nav-item">Docs</span>
+          </div>
+          <div className="landing-nav-actions">
             <Link href="/login" style={{ color: "#fff", fontSize: 13, fontWeight: 700, background: "#6d5dfc", padding: "8px 16px", borderRadius: 9, textDecoration: "none" }}>Sign in</Link>
           </div>
         </nav>

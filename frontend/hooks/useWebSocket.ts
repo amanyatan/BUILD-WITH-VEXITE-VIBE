@@ -29,6 +29,8 @@ export function useWebSocket(projectId: string) {
   const [aiSpeaking, setAiSpeaking] = useState(false);
   const [aiThinking, setAiThinking] = useState(false);
 
+  const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000/api";
+
   const startSession = useCallback(() => {
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) return;
     if (connecting) return;
@@ -70,23 +72,16 @@ export function useWebSocket(projectId: string) {
           setGeneratedFiles((prev) => ({ ...prev, ...data.files }));
         }
 
+        if (data.type === "audio_response" && data.audio) {
+          setAiSpeaking(true);
+          playBase64Audio(data.audio, data.audioMimeType || "audio/wav").finally(() => setAiSpeaking(false));
+        }
+
         if (data.type === "text_response" && data.text) {
           setEvents((prev) => [...prev, {
             type: "text_response",
             message: { id: `ai-${Date.now()}`, role: "designer", content: data.text, timestamp: new Date().toISOString() },
           }]);
-        }
-
-        if (data.type === "audio_response" && data.audio) {
-          setAiSpeaking(true);
-          playAudioPCM(data.audio, data.mimeType || "audio/pcm;rate=24000").finally(() => setAiSpeaking(false));
-        }
-
-        if (data.type === "turn_complete") setAiSpeaking(false);
-        if (data.type === "interrupted") setAiSpeaking(false);
-
-        if (data.type === "error") {
-          console.error("WS error:", data.message);
         }
       } catch { /* ignore */ }
     };
@@ -95,7 +90,6 @@ export function useWebSocket(projectId: string) {
       setConnected(false);
       setConnecting(false);
     };
-
     ws.onerror = () => {
       setConnected(false);
       setConnecting(false);
@@ -104,55 +98,101 @@ export function useWebSocket(projectId: string) {
 
   const sendText = useCallback(async (text: string) => {
     setAiThinking(true);
-
     setEvents((prev) => [...prev, {
       type: "user_message",
       message: { id: `user-${Date.now()}`, role: "user", content: text, timestamp: new Date().toISOString() },
     }]);
 
     try {
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000/api";
       const res = await fetch(`${apiUrl}/ai/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ message: text, projectId }),
       });
-
       const data = await res.json();
-
       if (!res.ok) throw new Error(data.error || "Chat failed");
 
-      if (data.text) {
-        setEvents((prev) => [...prev, {
-          type: "text_response",
-          message: { id: `ai-${Date.now()}`, role: data.agent || "designer", content: data.text, timestamp: new Date().toISOString() },
-        }]);
-      }
-
-      if (data.agent) {
-        setAgentStatus((p) => ({ ...p, [data.agent]: "idle" }));
-      }
-    } catch (err) {
-      console.error("Chat error:", err);
       setEvents((prev) => [...prev, {
         type: "text_response",
-        message: { id: `err-${Date.now()}`, role: "designer", content: `Error: ${err instanceof Error ? err.message : "Failed to get response"}`, timestamp: new Date().toISOString() },
+        message: { id: `ai-${Date.now()}`, role: data.agent || "designer", content: data.text, timestamp: new Date().toISOString() },
+      }]);
+
+      if (data.audio) {
+        setAiSpeaking(true);
+        playBase64Audio(data.audio, data.audioMimeType || "audio/wav").finally(() => setAiSpeaking(false));
+      }
+    } catch (err) {
+      setEvents((prev) => [...prev, {
+        type: "text_response",
+        message: { id: `err-${Date.now()}`, role: "designer", content: `Error: ${err instanceof Error ? err.message : "Failed"}`, timestamp: new Date().toISOString() },
       }]);
     } finally {
       setAiThinking(false);
     }
-  }, [projectId]);
+  }, [projectId, apiUrl]);
 
-  const sendAudio = useCallback((base64PCM: string) => {
-    wsRef.current?.send(JSON.stringify({ type: "audio_chunk", audio: base64PCM }));
-  }, []);
+  const sendAudio = useCallback(async (base64PCM: string) => {
+    setAiThinking(true);
+    setEvents((prev) => [...prev, {
+      type: "user_message",
+      message: { id: `user-${Date.now()}`, role: "user", content: "🎤 Speaking…", timestamp: new Date().toISOString() },
+    }]);
+
+    try {
+      const transRes = await fetch(`${apiUrl}/voice/transcribe`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ audio: base64PCM, mimeType: "audio/pcm;rate=16000" }),
+      });
+      const transData = await transRes.json();
+      if (!transRes.ok) throw new Error(transData.error || "Transcription failed");
+
+      const transcript = transData.transcript;
+      if (!transcript?.trim()) {
+        setAiThinking(false);
+        return;
+      }
+
+      setEvents((prev) => {
+        const filtered = prev.filter((e) => e.message?.content !== "🎤 Speaking…");
+        return [...filtered, {
+          type: "user_message",
+          message: { id: `user-${Date.now()}`, role: "user", content: transcript, timestamp: new Date().toISOString() },
+        }];
+      });
+
+      const chatRes = await fetch(`${apiUrl}/ai/chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: transcript, projectId }),
+      });
+      const chatData = await chatRes.json();
+      if (!chatRes.ok) throw new Error(chatData.error || "Chat failed");
+
+      setEvents((prev) => [...prev, {
+        type: "text_response",
+        message: { id: `ai-${Date.now()}`, role: chatData.agent || "designer", content: chatData.text, timestamp: new Date().toISOString() },
+      }]);
+
+      if (chatData.audio) {
+        setAiSpeaking(true);
+        playBase64Audio(chatData.audio, chatData.audioMimeType || "audio/wav").finally(() => setAiSpeaking(false));
+      }
+    } catch (err) {
+      setEvents((prev) => [...prev, {
+        type: "text_response",
+        message: { id: `err-${Date.now()}`, role: "designer", content: `Error: ${err instanceof Error ? err.message : "Failed"}`, timestamp: new Date().toISOString() },
+      }]);
+    } finally {
+      setAiThinking(false);
+    }
+  }, [projectId, apiUrl]);
 
   const interrupt = useCallback(() => {
-    wsRef.current?.send(JSON.stringify({ type: "interrupt" }));
+    setAiSpeaking(false);
   }, []);
 
   const stopSession = useCallback(() => {
-    wsRef.current?.send(JSON.stringify({ type: "stop_session" }));
     wsRef.current?.close();
     wsRef.current = null;
     setConnected(false);
@@ -166,37 +206,47 @@ export function useWebSocket(projectId: string) {
     setAiThinking(false);
   }, []);
 
-  function playAudioPCM(base64Data: string, mimeType: string): Promise<void> {
-    return new Promise((resolve) => {
-      try {
+  async function playBase64Audio(base64Data: string, mimeType: string): Promise<void> {
+    try {
+      const byteString = atob(base64Data);
+      const ab = new ArrayBuffer(byteString.length);
+      const ia = new Uint8Array(ab);
+      for (let i = 0; i < byteString.length; i++) ia[i] = byteString.charCodeAt(i);
+
+      let blob: Blob;
+      if (mimeType.includes("wav")) {
+        blob = new Blob([ab], { type: "audio/wav" });
+      } else if (mimeType.includes("pcm")) {
         const rateMatch = mimeType.match(/rate=(\d+)/);
         const sampleRate = rateMatch ? parseInt(rateMatch[1]) : 24000;
-
-        const raw = atob(base64Data);
-        const bytes = new Uint8Array(raw.length);
-        for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
-
-        const int16 = new Int16Array(bytes.buffer);
-        const float32 = new Float32Array(int16.length);
-        for (let i = 0; i < int16.length; i++) {
-          float32[i] = int16[i] / 32768.0;
-        }
-
+        const raw = new Int16Array(ab);
+        const float32 = new Float32Array(raw.length);
+        for (let i = 0; i < raw.length; i++) float32[i] = raw[i] / 32768.0;
         const ctx = audioCtxRef.current || new AudioContext({ sampleRate });
         audioCtxRef.current = ctx;
-
         const buffer = ctx.createBuffer(1, float32.length, sampleRate);
         buffer.getChannelData(0).set(float32);
-
         const source = ctx.createBufferSource();
         source.buffer = buffer;
         source.connect(ctx.destination);
-        source.onended = () => resolve();
-        source.start();
-      } catch {
-        resolve();
+        return new Promise((resolve) => {
+          source.onended = () => resolve();
+          source.start();
+        });
+      } else {
+        blob = new Blob([ab], { type: mimeType });
       }
-    });
+
+      const url = URL.createObjectURL(blob);
+      const audio = new Audio(url);
+      return new Promise((resolve) => {
+        audio.onended = () => { URL.revokeObjectURL(url); resolve(); };
+        audio.onerror = () => { URL.revokeObjectURL(url); resolve(); };
+        audio.play().catch(() => resolve());
+      });
+    } catch {
+      // ignore
+    }
   }
 
   return { connected, connecting, events, agentStatus, currentStep, generatedFiles, validationResult, aiSpeaking, aiThinking, startSession, sendText, sendAudio, interrupt, stopSession };

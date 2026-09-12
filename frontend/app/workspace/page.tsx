@@ -26,6 +26,8 @@ function WorkspaceContent() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const audioCtxRef = useRef<AudioContext | null>(null);
   const processorRef = useRef<ScriptProcessorNode | null>(null);
+  const mediaStreamRef = useRef<MediaStream | null>(null);
+  const recordedChunksRef = useRef<Int16Array[]>([]);
 
   const { connected, connecting, events, agentStatus, currentStep, generatedFiles, validationResult, aiSpeaking, aiThinking, startSession, sendText, sendAudio, interrupt, stopSession } = useWebSocket(projectId);
 
@@ -56,6 +58,9 @@ function WorkspaceContent() {
       processorRef.current.disconnect();
       processorRef.current = null;
     }
+    mediaStreamRef.current?.getTracks().forEach((t) => t.stop());
+    mediaStreamRef.current = null;
+    recordedChunksRef.current = [];
     if (audioCtxRef.current) {
       audioCtxRef.current.close();
       audioCtxRef.current = null;
@@ -72,14 +77,32 @@ function WorkspaceContent() {
   async function toggleRecording() {
     if (isRecording) {
       processorRef.current?.disconnect();
-      audioCtxRef.current?.close();
-      audioCtxRef.current = null;
       processorRef.current = null;
+      mediaStreamRef.current?.getTracks().forEach((t) => t.stop());
+      mediaStreamRef.current = null;
       setIsRecording(false);
+
+      if (recordedChunksRef.current.length > 0) {
+        const totalLen = recordedChunksRef.current.reduce((sum, c) => sum + c.length, 0);
+        const merged = new Int16Array(totalLen);
+        let offset = 0;
+        for (const chunk of recordedChunksRef.current) {
+          merged.set(chunk, offset);
+          offset += chunk.length;
+        }
+        recordedChunksRef.current = [];
+
+        let binary = "";
+        const bytes = new Uint8Array(merged.buffer);
+        for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+        sendAudio(btoa(binary));
+      }
       return;
     }
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      recordedChunksRef.current = [];
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: { sampleRate: 16000, channelCount: 1 } });
+      mediaStreamRef.current = stream;
       const ctx = new AudioContext({ sampleRate: 16000 });
       audioCtxRef.current = ctx;
       const source = ctx.createMediaStreamSource(stream);
@@ -93,10 +116,7 @@ function WorkspaceContent() {
           const s = Math.max(-1, Math.min(1, inputData[i]));
           int16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
         }
-        let binary = "";
-        const bytes = new Uint8Array(int16.buffer);
-        for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
-        sendAudio(btoa(binary));
+        recordedChunksRef.current.push(new Int16Array(int16));
       };
 
       source.connect(processor);
