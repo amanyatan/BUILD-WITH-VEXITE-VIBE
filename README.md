@@ -28,6 +28,90 @@ The workspace is designed around one creative loop:
 6. **Iterate** in the editor and live preview.
 7. **Own and ship** the resulting project.
 
+## Why we built Vibe
+
+### Problem statement
+
+Most AI development tools are still text-first, disconnected, and difficult to adapt. Voice interfaces often stop at transcription or a simple question-and-answer experience, while RAG (Retrieval-Augmented Generation) is commonly treated as a separate feature rather than part of a natural conversation. This creates friction for people who think aloud, speak in a regional language, or want an AI assistant to use current, relevant context while it helps them build.
+
+Vibe addresses this gap by bringing natural-language voice, retrieval-grounded context, and an agentic website-building workflow into one open-source workspace. A user can explain an idea conversationally, ask for current information when needed, and collaborate with Designer, Developer, and Tester agents without translating their thoughts into rigid prompts.
+
+### Our mission
+
+We are building Vibe so developers, students, creators, and open-source communities can inspect, extend, and self-host a next-generation voice-enabled AI workspace. The project is intentionally open source under the MIT License: the goal is not to keep this experience inside a closed product, but to give developers a foundation they can improve for their own languages, domains, tools, and RAG sources.
+
+## Hackathon priorities
+
+### Real-World Problem & Impact — 20%
+
+Vibe reduces the blank-editor barrier between an idea and a working website. Users can describe what they want using text or voice, receive help from specialized agents, review the generated files, and see the result in a live preview. This is useful for early-stage founders, learners, non-native English speakers, and teams that need to move quickly from a rough idea to a testable prototype.
+
+The impact is also structural: by publishing the voice and agent workflow as an open-source project, we make it possible for developers to build more accessible AI tools instead of depending only on closed, text-only experiences.
+
+### Best Use of Google Gemini API — 20%
+
+Gemini is used where multimodal and conversational capabilities create the most value:
+
+- **Gemini Live** powers the native audio-to-audio conversation over a persistent WebSocket.
+- Browser microphone audio is streamed as PCM, and Gemini's returned audio is played back in the browser.
+- Users can interrupt the assistant while it is speaking, enabling natural barge-in interaction.
+- Gemini text generation supports the agent workflow and turns grounded context into useful design, development, and testing responses.
+- The conversation layer can add retrieved web context for requests such as current research, latest information, or online lookups.
+
+This is more than adding a voice button to a chatbot: Gemini is part of the core interaction loop that understands intent, coordinates the AI team, and helps produce a working artifact.
+
+### Innovation & Creativity — 15%
+
+Vibe combines three ideas into a single loop:
+
+1. **Voice-first creation** for brainstorming and hands-free interaction.
+2. **Specialized collaboration** between Designer, Developer, and Tester agents instead of one opaque assistant.
+3. **Visible, editable output** through the Monaco editor and live preview, so users remain in control of the generated project.
+
+The result is an AI creation environment that treats conversation, code, validation, and iteration as connected parts of the same product experience.
+
+### UI/UX & User Experience — 15%
+
+The interface is designed to make AI work understandable and actionable:
+
+- A focused workspace combines conversation, agent status, code editing, and preview.
+- Agent events and validation results remain visible instead of being hidden behind a single final response.
+- Users can switch between voice and text, inspect every generated file, and iterate immediately.
+- Responsive layouts support both the landing page and the application workspace.
+- Interruption support makes the voice experience feel conversational rather than like a one-way audio player.
+
+### Deployment & Accessibility — 10%
+
+Vibe is built as a practical full-stack application that can run locally and be deployed as separate frontend and backend services. Environment variables keep credentials configurable, Supabase provides authentication and persistence, and the backend exposes health and API endpoints for deployment checks.
+
+Accessibility is part of the product direction: users can communicate through text or voice, the workspace exposes status and error feedback, and the open-source architecture allows communities to add language support, alternate voice providers, and domain-specific retrieval systems.
+
+### Technical Implementation — 10%
+
+The implementation uses a clear separation of concerns:
+
+- **Next.js, React, TypeScript, and Tailwind CSS** provide the frontend workspace.
+- **Express and TypeScript** provide REST APIs and server-side orchestration.
+- **WebSocket (`ws`)** maintains the low-latency Gemini Live conversation.
+- **Supabase Auth, PostgreSQL, and Row Level Security** support identity and project data.
+- **Monaco Editor** provides an in-browser code editing experience.
+- **Tavily, Groq, Sarvam, and GitHub integrations** extend research, agent, voice, and shipping workflows.
+- Security middleware, rate limiting, server-side secrets, and explicit environment configuration support safer deployment.
+
+### Demo & Presentation — 10%
+
+The clearest demo path follows one complete user journey:
+
+1. Sign in and open the Vibe workspace.
+2. Describe a website idea by voice in natural language.
+3. Let Gemini Live understand the request and select the appropriate agent.
+4. Watch the Designer, Developer, and Tester workflow produce and validate files.
+5. Open the generated result in the editor and live preview.
+6. Interrupt the assistant, refine the request, and show the updated output.
+7. Explain how the MIT-licensed codebase lets other developers extend the same workflow.
+
+This demonstrates the problem, the Gemini integration, the user experience, and the working technical result in one cohesive story.
+
 ## How it works
 
 ```mermaid
