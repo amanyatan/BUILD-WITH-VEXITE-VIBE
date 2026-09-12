@@ -5,6 +5,7 @@ import { config } from "../config";
 import { AgentName, isAgentName } from "./agent-router.service";
 import { AgentOrchestrator } from "../agents/agent.orchestrator";
 import { searchWeb } from "./tavily.service";
+import { subscribeToProject } from "./event-bus";
 
 type ClientMessage =
   | { type: "start_session"; projectId?: string }
@@ -74,8 +75,11 @@ function closeSocket(ws: WebSocket | null): void {
 }
 
 function runAgentTask(session: LiveSession, args: { agent?: string; task?: string }): { status: string; message: string } {
-  if (!isAgentName(args.agent) || !args.task) throw new Error("Agent task requires a valid agent and task");
-  session.activeAgent = args.agent;
+  if (!args.agent || !args.task) throw new Error("Agent task requires a valid agent and task");
+  if (!isAgentName(args.agent)) throw new Error(`Invalid agent: ${args.agent}`);
+
+  const agent: AgentName = args.agent;
+  session.activeAgent = agent;
 
   const orchestrator = new AgentOrchestrator(session.projectId || session.id);
   orchestrator.onEvent((event) => {
@@ -88,14 +92,14 @@ function runAgentTask(session: LiveSession, args: { agent?: string; task?: strin
     send(session.ws, { type: "workflow_event", event });
   });
 
-  orchestrator.start(args.task).catch((err) => {
+  orchestrator.start(args.task, agent).catch((err) => {
     console.error("Agent workflow error:", err);
     send(session.ws, { type: "error", message: `Agent workflow failed: ${err.message}` });
   });
 
   return {
     status: "started",
-    message: `The ${args.agent} agent is now working on: ${args.task}. Code updates will appear in the editor as they are generated.`,
+    message: `The ${agent} agent is now working on: ${args.task}. Code updates will appear in the editor as they are generated.`,
   };
 }
 
@@ -138,32 +142,30 @@ function connectGemini(session: LiveSession): void {
     sendLive(live, {
       setup: {
         model: `models/${config.geminiLiveModel}`,
-        responseModalities: ["AUDIO"],
+        generationConfig: {
+          responseModalities: ["AUDIO"],
+        },
         tools: toolDeclarations,
         systemInstruction: {
           parts: [{
             text: `You are Vibe, a friendly AI website builder assistant. You have a team of 3 agents: Designer, Developer, and Tester.
 
-Your role:
-- Be conversational, warm, and helpful. Greet the user and ask clarifying questions when needed.
-- When the user asks to BUILD, CREATE, or CODE a website/app, use the run_agent_task tool with agent="developer" and a clear task description.
-- When the user asks to DESIGN or PLAN, use run_agent_task with agent="designer".
-- When the user asks to TEST or VALIDATE, use run_agent_task with agent="tester".
-- When the user asks general questions (what is React? how does CSS work? etc.), answer directly from your knowledge — do NOT use tools for general knowledge questions.
-- Keep audio responses short and natural (2-3 sentences max).
-- Confirm when agents start working and let the user know code will appear in the editor.
+IMPORTANT: Only call ONE agent per request. Never call multiple agents.
 
-Example interactions:
-User: "Build a tic tac toe game for me"
-You: "Great idea! Let me have the Developer agent build a tic-tac-toe game for you right now. The code will appear in your editor shortly."
-[Then call run_agent_task with agent="developer", task="Build a tic-tac-toe game with HTML, CSS, and JavaScript"]
+Routing rules:
+- User says "BUILD", "CREATE", "CODE", "MAKE" a website/app → call run_agent_task with agent="developer"
+- User says "DESIGN", "PLAN", "SKETCH" → call run_agent_task with agent="designer"
+- User says "TEST", "VALIDATE", "CHECK" → call run_agent_task with agent="tester"
+- User asks a general question (what is React? how does CSS work?) → answer directly, do NOT use any tool
+- User says "fix", "update", "change" something about existing code → call run_agent_task with agent="developer"
 
-User: "What is React?"
-You: "React is a JavaScript library for building user interfaces, maintained by Meta. It lets you create reusable UI components. Would you like me to build something with React?"
+Keep audio responses short (1-2 sentences). Confirm the agent is working and code will appear in the editor.
 
-User: "Make the button blue"
-You: "Sure! Let me have the Developer update that for you."
-[Then call run_agent_task with agent="developer", task="Change the button color to blue"]`,
+Examples:
+User: "Build a tic tac toe game" → You: "I'll have the Developer build that for you!" [call run_agent_task(agent="developer", task="Build a tic-tac-toe game with HTML, CSS, and JavaScript")]
+User: "Design a portfolio website" → You: "Let me have the Designer plan that out!" [call run_agent_task(agent="designer", task="Design a portfolio website plan")]
+User: "Test the code" → You: "Running the Tester now!" [call run_agent_task(agent="tester", task="Validate the current website files")]
+User: "What is React?" → You: "React is a JavaScript library for building user interfaces. Want me to build something with it?"`,
           }],
         },
         inputAudioTranscription: {},
@@ -278,6 +280,11 @@ export function setupConversationWebSocket(server: Server): void {
         if (message.type === "start_session") {
           session.projectId = message.projectId;
           connectGemini(session);
+
+          if (message.projectId) {
+            const unsub = subscribeToProject(message.projectId, (msg) => send(session.ws, msg));
+            ws.on("close", () => unsub());
+          }
 
         } else if (message.type === "text_message") {
           if (!message.text?.trim()) throw new Error("Empty text message");

@@ -27,6 +27,7 @@ export function useWebSocket(projectId: string) {
   const [generatedFiles, setGeneratedFiles] = useState<Record<string, string>>({});
   const [validationResult, setValidationResult] = useState<WorkflowEvent["validation"] | null>(null);
   const [aiSpeaking, setAiSpeaking] = useState(false);
+  const [aiThinking, setAiThinking] = useState(false);
 
   const startSession = useCallback(() => {
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) return;
@@ -44,10 +45,6 @@ export function useWebSocket(projectId: string) {
     ws.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
-
-        if (data.type === "session_started") {
-          // waiting for live_ready
-        }
 
         if (data.type === "live_ready") {
           setConnected(true);
@@ -73,20 +70,6 @@ export function useWebSocket(projectId: string) {
           setGeneratedFiles((prev) => ({ ...prev, ...data.files }));
         }
 
-        if (data.type === "input_transcript" && data.text) {
-          setEvents((prev) => [...prev, {
-            type: "user_message",
-            message: { id: `user-${Date.now()}`, role: "user", content: data.text, timestamp: new Date().toISOString() },
-          }]);
-        }
-
-        if (data.type === "output_transcript" && data.text) {
-          setEvents((prev) => [...prev, {
-            type: "agent_message",
-            message: { id: `ai-${Date.now()}`, role: "designer", content: data.text, timestamp: new Date().toISOString() },
-          }]);
-        }
-
         if (data.type === "text_response" && data.text) {
           setEvents((prev) => [...prev, {
             type: "text_response",
@@ -99,13 +82,8 @@ export function useWebSocket(projectId: string) {
           playAudioPCM(data.audio, data.mimeType || "audio/pcm;rate=24000").finally(() => setAiSpeaking(false));
         }
 
-        if (data.type === "turn_complete") {
-          setAiSpeaking(false);
-        }
-
-        if (data.type === "interrupted") {
-          setAiSpeaking(false);
-        }
+        if (data.type === "turn_complete") setAiSpeaking(false);
+        if (data.type === "interrupted") setAiSpeaking(false);
 
         if (data.type === "error") {
           console.error("WS error:", data.message);
@@ -124,9 +102,46 @@ export function useWebSocket(projectId: string) {
     };
   }, [projectId, connecting]);
 
-  const sendText = useCallback((text: string) => {
-    wsRef.current?.send(JSON.stringify({ type: "text_message", text }));
-  }, []);
+  const sendText = useCallback(async (text: string) => {
+    setAiThinking(true);
+
+    setEvents((prev) => [...prev, {
+      type: "user_message",
+      message: { id: `user-${Date.now()}`, role: "user", content: text, timestamp: new Date().toISOString() },
+    }]);
+
+    try {
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000/api";
+      const res = await fetch(`${apiUrl}/ai/chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: text, projectId }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) throw new Error(data.error || "Chat failed");
+
+      if (data.text) {
+        setEvents((prev) => [...prev, {
+          type: "text_response",
+          message: { id: `ai-${Date.now()}`, role: data.agent || "designer", content: data.text, timestamp: new Date().toISOString() },
+        }]);
+      }
+
+      if (data.agent) {
+        setAgentStatus((p) => ({ ...p, [data.agent]: "idle" }));
+      }
+    } catch (err) {
+      console.error("Chat error:", err);
+      setEvents((prev) => [...prev, {
+        type: "text_response",
+        message: { id: `err-${Date.now()}`, role: "designer", content: `Error: ${err instanceof Error ? err.message : "Failed to get response"}`, timestamp: new Date().toISOString() },
+      }]);
+    } finally {
+      setAiThinking(false);
+    }
+  }, [projectId]);
 
   const sendAudio = useCallback((base64PCM: string) => {
     wsRef.current?.send(JSON.stringify({ type: "audio_chunk", audio: base64PCM }));
@@ -148,6 +163,7 @@ export function useWebSocket(projectId: string) {
     setGeneratedFiles({});
     setValidationResult(null);
     setAiSpeaking(false);
+    setAiThinking(false);
   }, []);
 
   function playAudioPCM(base64Data: string, mimeType: string): Promise<void> {
@@ -183,5 +199,5 @@ export function useWebSocket(projectId: string) {
     });
   }
 
-  return { connected, connecting, events, agentStatus, currentStep, generatedFiles, validationResult, aiSpeaking, startSession, sendText, sendAudio, interrupt, stopSession };
+  return { connected, connecting, events, agentStatus, currentStep, generatedFiles, validationResult, aiSpeaking, aiThinking, startSession, sendText, sendAudio, interrupt, stopSession };
 }

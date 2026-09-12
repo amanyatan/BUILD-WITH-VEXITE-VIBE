@@ -9,6 +9,7 @@ import {
   ValidationResult,
   WorkflowState,
 } from "./agent.types";
+import { AgentName } from "../services/agent-router.service";
 
 export type WorkflowEvent = {
   type: "agent_thinking" | "agent_message" | "agent_speaking" | "workflow_step" | "code_update" | "validation_update" | "complete";
@@ -52,10 +53,86 @@ export class AgentOrchestrator {
     return { ...this.state };
   }
 
-  async start(userRequest: string): Promise<void> {
+  async start(userRequest: string, targetAgent?: AgentName): Promise<void> {
     this.state.isActive = true;
-    this.state.currentStep = "design";
 
+    if (targetAgent === "designer") {
+      await this.runDesignerOnly(userRequest);
+    } else if (targetAgent === "developer") {
+      await this.runDeveloperOnly(userRequest);
+    } else if (targetAgent === "tester") {
+      await this.runTesterOnly(userRequest);
+    } else {
+      await this.runFullPipeline(userRequest);
+    }
+  }
+
+  private async runDesignerOnly(userRequest: string): Promise<void> {
+    this.state.currentStep = "design";
+    this.emit({ type: "workflow_step", step: "design" });
+    this.emit({ type: "agent_thinking", agent: "designer" });
+
+    const designMsg = await this.designer.process({ userRequest });
+    this.state.messages.push(designMsg);
+    this.state.designPlan = this.designer.parsePlan(designMsg.content) || undefined;
+
+    this.emit({ type: "agent_message", agent: "designer", message: designMsg });
+    this.emit({ type: "agent_speaking", agent: "designer", message: designMsg });
+    this.complete();
+  }
+
+  private async runDeveloperOnly(userRequest: string): Promise<void> {
+    this.state.currentStep = "develop";
+    this.emit({ type: "workflow_step", step: "develop" });
+    this.emit({ type: "agent_thinking", agent: "developer" });
+
+    const planFromRequest: DesignPlan = {
+      websiteType: "custom",
+      goal: userRequest,
+      targetAudience: "users",
+      sections: ["main content"],
+      features: [],
+      style: { theme: "modern", colors: [], typography: "system", layout: "responsive", spacing: "comfortable" },
+      responsiveBehavior: ["mobile-friendly"],
+      accessibilityRequirements: ["semantic HTML"],
+      requirements: [userRequest],
+    };
+
+    const devMsg = await this.developer.process({ designPlan: planFromRequest });
+    this.state.messages.push(devMsg);
+
+    const result = this.developer.parseFiles(devMsg.content);
+    if (result) {
+      this.state.generatedFiles = result.files;
+      this.emit({ type: "code_update", files: result.files });
+    }
+
+    this.emit({ type: "agent_message", agent: "developer", message: devMsg });
+    this.emit({ type: "agent_speaking", agent: "developer", message: devMsg });
+    this.complete();
+  }
+
+  private async runTesterOnly(userRequest: string): Promise<void> {
+    this.state.currentStep = "test";
+    this.emit({ type: "workflow_step", step: "test" });
+    this.emit({ type: "agent_thinking", agent: "tester" });
+
+    const testMsg = await this.tester.process({ files: this.state.generatedFiles || [] });
+    this.state.messages.push(testMsg);
+
+    const validation = this.tester.parseValidation(testMsg.content);
+    if (validation) {
+      this.state.validationResult = validation;
+      this.emit({ type: "validation_update", validation });
+    }
+
+    this.emit({ type: "agent_message", agent: "tester", message: testMsg });
+    this.emit({ type: "agent_speaking", agent: "tester", message: testMsg });
+    this.complete();
+  }
+
+  private async runFullPipeline(userRequest: string): Promise<void> {
+    this.state.currentStep = "design";
     this.emit({ type: "workflow_step", step: "design" });
     this.emit({ type: "agent_thinking", agent: "designer" });
 
@@ -67,8 +144,7 @@ export class AgentOrchestrator {
     this.emit({ type: "agent_speaking", agent: "designer", message: designMsg });
 
     if (!this.state.designPlan) {
-      this.emit({ type: "complete" });
-      this.state.isActive = false;
+      this.complete();
       return;
     }
 

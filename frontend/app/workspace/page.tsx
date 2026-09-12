@@ -27,7 +27,7 @@ function WorkspaceContent() {
   const audioCtxRef = useRef<AudioContext | null>(null);
   const processorRef = useRef<ScriptProcessorNode | null>(null);
 
-  const { connected, connecting, events, agentStatus, currentStep, generatedFiles, validationResult, aiSpeaking, startSession, sendText, sendAudio, interrupt, stopSession } = useWebSocket(projectId);
+  const { connected, connecting, events, agentStatus, currentStep, generatedFiles, validationResult, aiSpeaking, aiThinking, startSession, sendText, sendAudio, interrupt, stopSession } = useWebSocket(projectId);
 
   const messages = events.filter((e) => e.type === "agent_message" || e.type === "user_message" || e.type === "workflow_step" || e.type === "text_response");
 
@@ -178,10 +178,18 @@ function WorkspaceContent() {
               </div>
             )}
 
-            {sessionStarted && messages.length === 0 && (
+            {sessionStarted && messages.length === 0 && !aiThinking && (
               <div style={{ textAlign: "center", padding: "30px 20px" }}>
                 <p style={{ color: "var(--muted)", fontSize: 13, marginBottom: 4 }}>Conversation started!</p>
                 <p style={{ color: "var(--muted)", fontSize: 12 }}>Try: &ldquo;Build a tic-tac-toe game for me&rdquo;</p>
+              </div>
+            )}
+
+            {aiThinking && (
+              <div style={{ textAlign: "center", padding: "10px 0" }}>
+                <span style={{ fontSize: 12, color: "var(--muted)", display: "inline-flex", alignItems: "center", gap: 6 }}>
+                  <Loader2 size={12} className="animate-spin" /> Vibe is thinking…
+                </span>
               </div>
             )}
 
