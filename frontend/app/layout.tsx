@@ -29,8 +29,8 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
 
   if (checking && !publicPaths.includes(pathname)) {
     return (
-      <html lang="en">
-        <body>
+      <html lang="en" suppressHydrationWarning>
+      <body suppressHydrationWarning>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100vh", color: "#697386" }}>
             Loading...
           </div>
@@ -40,8 +40,8 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   }
 
   return (
-    <html lang="en">
-      <body>
+    <html lang="en" suppressHydrationWarning>
+      <body suppressHydrationWarning>
         {children}
         <Toaster position="bottom-right" />
       </body>

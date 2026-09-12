@@ -1,7 +1,7 @@
 import { Request, Response } from "express";
 import { transcribeAudio, synthesizeText } from "../voice/voiceService";
 
-function pcmToWav(pcmBuffer: Buffer, sampleRate = 16000, channels = 1, bitsPerSample = 16): Buffer {
+function pcmToWav(pcmBuffer: Buffer, sampleRate = 16000, channels = 1, bitsPerSample = 16): Buffer<ArrayBuffer> {
   const dataLength = pcmBuffer.length;
   const headerLength = 44;
   const totalLength = headerLength + dataLength;
@@ -32,7 +32,7 @@ export async function transcribe(req: Request, res: Response) {
       return res.status(400).json({ error: "Audio data required" });
     }
 
-    let audioBuffer = Buffer.from(audio, "base64");
+    let audioBuffer: Buffer<ArrayBuffer> = Buffer.from(audio, "base64") as Buffer<ArrayBuffer>;
 
     if (mimeType?.includes("pcm")) {
       const rateMatch = mimeType.match(/rate=(\d+)/);

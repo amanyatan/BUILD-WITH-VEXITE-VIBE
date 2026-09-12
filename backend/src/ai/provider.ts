@@ -90,7 +90,7 @@ function getProvider(): AIProvider {
   const aiProvider = config.aiProvider || "groq";
 
   if (aiProvider === "gemini" && config.geminiApiKey) {
-    provider = new GeminiProvider(config.geminiApiKey, config.geminiModel || "gemini-3.6-flash");
+    provider = new GeminiProvider(config.geminiApiKey, config.geminiModel || "gemini-2.5-flash");
   } else if (config.groqApiKey) {
     provider = new GroqProvider(config.groqApiKey, config.groqModel || "llama-3.3-70b-versatile");
   } else if (config.aiApiKey) {

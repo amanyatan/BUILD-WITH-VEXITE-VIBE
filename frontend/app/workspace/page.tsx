@@ -21,15 +21,10 @@ function WorkspaceContent() {
   const [activeFile, setActiveFile] = useState("index.html");
   const [prompt, setPrompt] = useState("");
   const [previewKey, setPreviewKey] = useState(0);
-  const [isRecording, setIsRecording] = useState(false);
   const [sessionStarted, setSessionStarted] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const audioCtxRef = useRef<AudioContext | null>(null);
-  const processorRef = useRef<ScriptProcessorNode | null>(null);
-  const mediaStreamRef = useRef<MediaStream | null>(null);
-  const recordedChunksRef = useRef<Int16Array[]>([]);
 
-  const { connected, connecting, events, agentStatus, currentStep, generatedFiles, validationResult, aiSpeaking, aiThinking, startSession, sendText, sendAudio, interrupt, stopSession } = useWebSocket(projectId);
+  const { connected, connecting, events, agentStatus, currentStep, generatedFiles, validationResult, aiSpeaking, aiThinking, audioError, startSession, sendText, interrupt, stopSession } = useWebSocket(projectId);
 
   const messages = events.filter((e) => e.type === "agent_message" || e.type === "user_message" || e.type === "workflow_step" || e.type === "text_response");
 
@@ -53,78 +48,13 @@ function WorkspaceContent() {
   function handleEndConversation() {
     stopSession();
     setSessionStarted(false);
-    setIsRecording(false);
-    if (processorRef.current) {
-      processorRef.current.disconnect();
-      processorRef.current = null;
-    }
-    mediaStreamRef.current?.getTracks().forEach((t) => t.stop());
-    mediaStreamRef.current = null;
-    recordedChunksRef.current = [];
-    if (audioCtxRef.current) {
-      audioCtxRef.current.close();
-      audioCtxRef.current = null;
-    }
   }
 
   function handleSend(e: React.FormEvent) {
     e.preventDefault();
-    if (!prompt.trim() || !sessionStarted) return;
+    if (!prompt.trim() || !sessionStarted || !connected) return;
     sendText(prompt.trim());
     setPrompt("");
-  }
-
-  async function toggleRecording() {
-    if (isRecording) {
-      processorRef.current?.disconnect();
-      processorRef.current = null;
-      mediaStreamRef.current?.getTracks().forEach((t) => t.stop());
-      mediaStreamRef.current = null;
-      setIsRecording(false);
-
-      if (recordedChunksRef.current.length > 0) {
-        const totalLen = recordedChunksRef.current.reduce((sum, c) => sum + c.length, 0);
-        const merged = new Int16Array(totalLen);
-        let offset = 0;
-        for (const chunk of recordedChunksRef.current) {
-          merged.set(chunk, offset);
-          offset += chunk.length;
-        }
-        recordedChunksRef.current = [];
-
-        let binary = "";
-        const bytes = new Uint8Array(merged.buffer);
-        for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
-        sendAudio(btoa(binary));
-      }
-      return;
-    }
-    try {
-      recordedChunksRef.current = [];
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: { sampleRate: 16000, channelCount: 1 } });
-      mediaStreamRef.current = stream;
-      const ctx = new AudioContext({ sampleRate: 16000 });
-      audioCtxRef.current = ctx;
-      const source = ctx.createMediaStreamSource(stream);
-      const processor = ctx.createScriptProcessor(4096, 1, 1);
-      processorRef.current = processor;
-
-      processor.onaudioprocess = (e) => {
-        const inputData = e.inputBuffer.getChannelData(0);
-        const int16 = new Int16Array(inputData.length);
-        for (let i = 0; i < inputData.length; i++) {
-          const s = Math.max(-1, Math.min(1, inputData[i]));
-          int16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
-        }
-        recordedChunksRef.current.push(new Int16Array(int16));
-      };
-
-      source.connect(processor);
-      processor.connect(ctx.destination);
-      setIsRecording(true);
-    } catch (err) {
-      console.error("Microphone error:", err);
-    }
   }
 
   const agentCards = [
@@ -145,7 +75,7 @@ function WorkspaceContent() {
             <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
               <span className="agent-pill">
                 <span style={{ display: "inline-block", width: 5, height: 5, background: connected ? "#20a36f" : "#e74c3c", borderRadius: "50%", marginRight: 4 }} />
-                {connected ? "Live" : "Connecting…"}
+                {connected ? "Live" : connecting ? "Connecting…" : "Offline"}
               </span>
               {aiSpeaking && <Volume2 size={14} color="#6d5dfc" style={{ animation: "spin 1s linear infinite" }} />}
               {sessionStarted && (
@@ -192,9 +122,6 @@ function WorkspaceContent() {
                 >
                   {connecting ? <Loader2 size={16} className="animate-spin" /> : <Phone size={16} />} {connecting ? "Connecting…" : "Start Conversation"}
                 </button>
-                {connecting && (
-                  <p style={{ color: "var(--muted)", fontSize: 11, marginTop: 8 }}>Connecting to AI…</p>
-                )}
               </div>
             )}
 
@@ -202,6 +129,14 @@ function WorkspaceContent() {
               <div style={{ textAlign: "center", padding: "30px 20px" }}>
                 <p style={{ color: "var(--muted)", fontSize: 13, marginBottom: 4 }}>Conversation started!</p>
                 <p style={{ color: "var(--muted)", fontSize: 12 }}>Try: &ldquo;Build a tic-tac-toe game for me&rdquo;</p>
+              </div>
+            )}
+
+            {audioError && (
+              <div style={{ textAlign: "center", padding: "5px 0" }}>
+                <span style={{ fontSize: 11, color: "#e74c3c", background: "#fce4e4", padding: "3px 10px", borderRadius: 6 }}>
+                  Voice error: {audioError}
+                </span>
               </div>
             )}
 
@@ -257,21 +192,24 @@ function WorkspaceContent() {
                   </div>
                 );
               }
+
+              if (event.type === "user_message" && event.message) {
+                return (
+                  <div key={i} className="message user">
+                    {event.message.content}
+                  </div>
+                );
+              }
               return null;
             })}
             <div ref={messagesEndRef} />
           </div>
 
           <form className="chat-form" onSubmit={handleSend}>
-            {sessionStarted && (
-              <button type="button" className="icon-button" onClick={toggleRecording} aria-label={isRecording ? "Stop" : "Voice"}>
-                {isRecording ? <MicOff size={15} color="#e74c3c" /> : <Mic size={15} />}
-              </button>
-            )}
             <input
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}
-              placeholder={!sessionStarted ? "Start a conversation first…" : "Type or use mic…"}
+              placeholder={!sessionStarted ? "Start a conversation first…" : !connected ? "Connecting…" : "Type your message…"}
               disabled={!sessionStarted || !connected}
             />
             {aiSpeaking ? (
